@@ -1,7 +1,7 @@
-import {describe, it}                                from 'node:test';
-import assert                                         from 'node:assert/strict';
+import {describe, it}                                       from 'node:test';
+import assert                                               from 'node:assert/strict';
 import {location, outputTail, renderComment, renderSummary} from '../lib/report.mjs';
-import {readFindings}                                 from '../lib/infra.mjs';
+import {readFindings}                                       from '../lib/infra.mjs';
 
 /**
  * What a reader is told about a template they cannot see.

@@ -1,9 +1,9 @@
-import {writeFileSync}                              from 'node:fs';
-import {afterEach, describe, it}                     from 'node:test';
-import assert                                        from 'node:assert/strict';
-import {ConfigError}                                 from '../lib/inputs.mjs';
-import {parseEnv, resolveConfig, shapeEnv}           from '../lib/config.mjs';
-import {mainRegion, parseShapes, resolveShapes}      from '../lib/shapes.mjs';
+import {writeFileSync}                          from 'node:fs';
+import {afterEach, describe, it}                from 'node:test';
+import assert                                   from 'node:assert/strict';
+import {ConfigError}                            from '../lib/inputs.mjs';
+import {parseEnv, resolveConfig, shapeEnv}      from '../lib/config.mjs';
+import {mainRegion, parseShapes, resolveShapes} from '../lib/shapes.mjs';
 
 /**
  * Which templates get synthesized. Get this wrong and the check passes by
