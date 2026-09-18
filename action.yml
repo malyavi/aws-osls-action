@@ -1,0 +1,229 @@
+name: Serverless infrastructure validation
+description: >-
+  Synthesizes every CloudFormation template a serverless configuration can
+  produce and lints each one, without deploying anything and without AWS
+  credentials.
+author: Malyavi
+
+branding:
+  icon: layers
+  color: orange
+
+inputs:
+  stage:
+    description: >-
+      Stage to synthesize for. It decides resource names and nothing about the
+      shape of the template, so a pull request into a branch that deploys
+      nowhere can still use any value.
+    required: false
+    default: dev
+  config-file:
+    description: >-
+      The serverless configuration. Read for the main region, never parsed as
+      YAML — it is full of expressions no plain parser resolves.
+    required: false
+    default: serverless.yml
+  main-region:
+    description: >-
+      The region the configuration is built around. Read out of the
+      configuration file when unset, so the two cannot disagree.
+    required: false
+    default: ''
+  main-region-key:
+    description: The key the main region is read from, under the configuration's own `custom:` block.
+    required: false
+    default: mainRegion
+  secondary-region:
+    description: >-
+      The stage's second region, if it has one. A stage with one region is one
+      template shape; a stage with two is three.
+    required: false
+    default: ''
+  validation-secondary-region:
+    description: >-
+      A second region to synthesize the multi-region shapes with when
+      `secondary-region` is unset — which is what a pull request job sees, since
+      it runs in no environment and so inherits no stage's variables.
+    required: false
+    default: ''
+  secondary-region-variable:
+    description: >-
+      The environment variable the configuration reads its second region from.
+      It is set for every shape, empty included, so a value left over in the
+      runner cannot leak into the single-region template.
+    required: false
+    default: SECONDARY_REGION
+  shapes:
+    description: >-
+      A JSON array of `{region, secondary?, label?, slug?}` to validate
+      instead of the derived ones, for a configuration whose conditional
+      resources this action cannot guess at.
+    required: false
+    default: ''
+  install:
+    description: Whether to install dependencies before packaging.
+    required: false
+    default: 'true'
+  install-command:
+    description: How to install them.
+    required: false
+    default: npm ci
+  package-command:
+    description: >-
+      The command that synthesizes the template. `--stage` and `--region` are
+      appended to it.
+    required: false
+    default: npx osls package
+  package-args:
+    description: Extra arguments for the package command.
+    required: false
+    default: ''
+  template-path:
+    description: Where the package command leaves the synthesized template.
+    required: false
+    default: .serverless/cloudformation-template-update-stack.json
+  cfn-lint:
+    description: >-
+      Whether to lint each synthesized template. Packaging alone accepts a
+      property CloudFormation does not have.
+    required: false
+    default: 'true'
+  install-cfn-lint:
+    description: Whether to install cfn-lint with pip.
+    required: false
+    default: 'true'
+  cfn-lint-version:
+    description: Version of cfn-lint to install. The newest release when unset.
+    required: false
+    default: ''
+  cfn-lint-command:
+    description: How to invoke cfn-lint.
+    required: false
+    default: cfn-lint
+  cfn-lint-args:
+    description: Extra arguments for cfn-lint, for example `--ignore-checks W3045`.
+    required: false
+    default: ''
+  non-zero-exit-code:
+    description: >-
+      The cfn-lint severity that fails the run — `warning`, `error` or
+      `informational`. Set it empty to let cfn-lint use its own default.
+    required: false
+    default: warning
+  account-id:
+    description: >-
+      A placeholder AWS account id, so the configuration prefers it over a
+      lookup that would call STS. Account ids appear only inside ARNs, so the
+      template's shape is the one a real deploy builds — and the job needs no
+      credentials, which is what lets it run on a fork's pull request.
+    required: false
+    default: '000000000000'
+  extra-env:
+    description: >-
+      Extra variables the configuration resolves at package time, as
+      `KEY=value` entries separated by commas or newlines.
+    required: false
+    default: ''
+  max-findings-listed:
+    description: Findings named in the comment before collapsing into a count.
+    required: false
+    default: '15'
+  label:
+    description: How the check is named in every message it writes.
+    required: false
+    default: Infrastructure
+  working-directory:
+    description: Directory holding the serverless configuration.
+    required: false
+    default: '.'
+  comment:
+    description: Whether to write the shared pull request comment at all.
+    required: false
+    default: 'true'
+  comment-section:
+    description: Section of the shared comment this action owns.
+    required: false
+    default: infra
+  comment-tag:
+    description: >-
+      HTML comment identifying the shared status comment. Several actions
+      reporting into one comment must be given the same tag.
+    required: false
+    default: '<!-- malyavi-pr-status-comment -->'
+  comment-section-order:
+    description: >-
+      Fixed rendering order for the comment's sections, comma-separated. A
+      section not listed renders after the listed ones.
+    required: false
+    default: ''
+  pr-number:
+    description: Pull request to comment on. Read from the event payload when unset.
+    required: false
+    default: ''
+  github-token:
+    description: Token used to read and write the pull request comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  outcome:
+    description: '`passed` or `failed`.'
+    value: ${{ steps.infra.outputs.outcome }}
+  shapes:
+    description: How many template shapes were validated.
+    value: ${{ steps.infra.outputs.shapes }}
+  findings:
+    description: Findings across every shape, warnings included.
+    value: ${{ steps.infra.outputs.findings }}
+  failed-shapes:
+    description: The slugs of the shapes that failed, comma-separated.
+    value: ${{ steps.infra.outputs.failed-shapes }}
+  template-paths:
+    description: >-
+      A JSON array of the synthesized templates, one per shape, for a later
+      step to upload. Kept per shape because packaging overwrites one path.
+    value: ${{ steps.infra.outputs.template-paths }}
+  findings-paths:
+    description: A JSON array of the cfn-lint reports, one per shape.
+    value: ${{ steps.infra.outputs.findings-paths }}
+
+runs:
+  using: composite
+  steps:
+    - name: Package and lint every template shape
+      id: infra
+      shell: bash
+      env:
+        # A composite action does not populate INPUT_* for its own run steps,
+        # so every input is mapped here and read through lib/inputs.mjs.
+        INPUT_STAGE: ${{ inputs.stage }}
+        INPUT_CONFIG_FILE: ${{ inputs.config-file }}
+        INPUT_MAIN_REGION: ${{ inputs.main-region }}
+        INPUT_MAIN_REGION_KEY: ${{ inputs.main-region-key }}
+        INPUT_SECONDARY_REGION: ${{ inputs.secondary-region }}
+        INPUT_VALIDATION_SECONDARY_REGION: ${{ inputs.validation-secondary-region }}
+        INPUT_SECONDARY_REGION_VARIABLE: ${{ inputs.secondary-region-variable }}
+        INPUT_SHAPES: ${{ inputs.shapes }}
+        INPUT_INSTALL: ${{ inputs.install }}
+        INPUT_INSTALL_COMMAND: ${{ inputs.install-command }}
+        INPUT_PACKAGE_COMMAND: ${{ inputs.package-command }}
+        INPUT_PACKAGE_ARGS: ${{ inputs.package-args }}
+        INPUT_TEMPLATE_PATH: ${{ inputs.template-path }}
+        INPUT_CFN_LINT: ${{ inputs.cfn-lint }}
+        INPUT_INSTALL_CFN_LINT: ${{ inputs.install-cfn-lint }}
+        INPUT_CFN_LINT_VERSION: ${{ inputs.cfn-lint-version }}
+        INPUT_CFN_LINT_COMMAND: ${{ inputs.cfn-lint-command }}
+        INPUT_CFN_LINT_ARGS: ${{ inputs.cfn-lint-args }}
+        INPUT_NON_ZERO_EXIT_CODE: ${{ inputs.non-zero-exit-code }}
+        INPUT_ACCOUNT_ID: ${{ inputs.account-id }}
+        INPUT_EXTRA_ENV: ${{ inputs.extra-env }}
+        INPUT_MAX_FINDINGS_LISTED: ${{ inputs.max-findings-listed }}
+        INPUT_LABEL: ${{ inputs.label }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_COMMENT_SECTION: ${{ inputs.comment-section }}
+        INPUT_COMMENT_TAG: ${{ inputs.comment-tag }}
+        INPUT_COMMENT_SECTION_ORDER: ${{ inputs.comment-section-order }}
+        INPUT_PR_NUMBER: ${{ inputs.pr-number }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: node "$GITHUB_ACTION_PATH/scripts/validate-infra.mjs"

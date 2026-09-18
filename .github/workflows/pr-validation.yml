@@ -1,0 +1,150 @@
+name: PR Validation
+
+# `tests` asks whether the logic is right; `smoke` asks whether the action runs.
+#
+# The smoke job runs cfn-lint for real, against templates written by a stand-in
+# packager — `test/fixtures/fake-package.mjs`, which asserts the contract this
+# action is responsible for (that `--stage` and `--region` arrive, and that the
+# secondary-region variable is set for every shape, empty included) and then
+# writes one broken template and two sound ones.
+#
+# That line is deliberate. Whether `osls package` can synthesize a real
+# configuration is the caller's tool doing the caller's job; installing it here
+# would test serverless rather than this action, and slowly.
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Check that action.yml parses
+        run: |
+          pip install --quiet --disable-pip-version-check pyyaml
+          python3 test/check-action-yaml.py
+
+  smoke:
+    name: Smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      # A directory of its own, so the action is pointed at a project that has
+      # nothing to do with this repository's own tooling.
+      - name: Build the fixture project
+        run: |
+          mkdir -p "${{ runner.temp }}/project/tools"
+          cp test/fixtures/serverless.yml "${{ runner.temp }}/project/"
+          cp test/fixtures/fake-package.mjs "${{ runner.temp }}/project/tools/"
+
+      # Three shapes derived from one region plus a validation region, with the
+      # third one broken on purpose. cfn-lint is real here.
+      - name: Validate three shapes, one of them broken
+        id: broken
+        uses: ./
+        continue-on-error: true
+        with:
+          working-directory: ${{ runner.temp }}/project
+          stage: dev
+          validation-secondary-region: us-west-1
+          package-command: node tools/fake-package.mjs
+          install: 'false'
+          comment: 'false'
+
+      - name: Check which shape failed, and how it was reported
+        env:
+          OUTCOME: ${{ steps.broken.outputs.outcome }}
+          SHAPES: ${{ steps.broken.outputs.shapes }}
+          FINDINGS: ${{ steps.broken.outputs.findings }}
+          FAILED: ${{ steps.broken.outputs.failed-shapes }}
+          TEMPLATES: ${{ steps.broken.outputs.template-paths }}
+        run: |
+          echo "outcome=$OUTCOME shapes=$SHAPES findings=$FINDINGS failed=$FAILED"
+          echo "templates=$TEMPLATES"
+          cd "${{ runner.temp }}/project"
+          fail() { echo "::error::$1"; exit 1; }
+          [ "${{ steps.broken.outcome }}" = "failure" ] || fail "A template that does not lint must fail the step; it reported '${{ steps.broken.outcome }}'."
+          [ "$SHAPES" = "3" ] || fail "One region plus a validation region is three shapes — the main region alone, the main region with a replica, and the secondary region. Got '$SHAPES'."
+          [ "$FAILED" = "us-west-1" ] || fail "Only the us-west-1 shape is broken, so it should be the only one reported as failed; got '$FAILED'."
+          [ "$FINDINGS" -ge 1 ] || fail "Expected at least one cfn-lint finding, got '$FINDINGS'."
+          # Kept per shape: packaging overwrites one path, so without the copy a
+          # reviewer can only read the last template a run produced.
+          for slug in us-east-1-single us-east-1-replicated us-west-1; do
+            [ -f "cloudformation-template-$slug.json" ] || fail "No template was kept for the $slug shape."
+          done
+          grep -q 'secondary=none' cloudformation-template-us-east-1-single.json || fail "The single-region shape was packaged with a secondary region set, so it is a copy of the replicated one."
+          grep -q 'secondary=us-west-1' cloudformation-template-us-east-1-replicated.json || fail "The replicated shape was packaged without a secondary region."
+
+      - name: Validate one sound shape
+        id: sound
+        uses: ./
+        with:
+          working-directory: ${{ runner.temp }}/project
+          stage: dev
+          # An explicit shape list, for a configuration whose conditional
+          # resources cannot be derived — and here, to leave the broken region out.
+          shapes: '[{"region":"us-east-1"}]'
+          package-command: node tools/fake-package.mjs
+          install: 'false'
+          install-cfn-lint: 'false'
+          comment: 'false'
+
+      - name: Check that a sound template passes
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [ "${{ steps.sound.outputs.outcome }}" = "passed" ] || fail "A sound template must pass; it reported '${{ steps.sound.outputs.outcome }}'."
+          [ "${{ steps.sound.outputs.shapes }}" = "1" ] || fail "An explicit one-shape list must validate one shape; got '${{ steps.sound.outputs.shapes }}'."
+          [ "${{ steps.sound.outputs.findings }}" = "0" ] || fail "Expected no findings, got '${{ steps.sound.outputs.findings }}'."
+
+      # A packaging failure is a different outcome from a lint failure, and the
+      # report has to say which one happened.
+      - name: A packaging failure is reported as one
+        id: unpackageable
+        uses: ./
+        continue-on-error: true
+        with:
+          working-directory: ${{ runner.temp }}/project
+          stage: dev
+          shapes: '[{"region":"us-east-1"}]'
+          package-command: node tools/nothing-here.mjs
+          install: 'false'
+          install-cfn-lint: 'false'
+          comment: 'false'
+
+      - name: Check that it failed at the packaging step
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [ "${{ steps.unpackageable.outcome }}" = "failure" ] || fail "A packaging failure must fail the step."
+          [ "${{ steps.unpackageable.outputs.outcome }}" = "failed" ] || fail "The outcome output should be 'failed', got '${{ steps.unpackageable.outputs.outcome }}'."
