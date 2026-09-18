@@ -1,0 +1,9 @@
+# A minimal configuration, for the tests that read the main region out of one.
+service: fixture
+
+custom:
+  mainRegion: us-east-1
+
+provider:
+  name: aws
+  runtime: nodejs20.x

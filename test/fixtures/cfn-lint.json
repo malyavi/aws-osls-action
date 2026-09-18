@@ -1,0 +1,14 @@
+[
+  {
+    "Rule": {
+      "Id": "E3005",
+      "Description": "Check DependsOn values for valid logical resource names"
+    },
+    "Level": "Error",
+    "Message": "DependsOn OrdersTable does not exist",
+    "Location": {
+      "Path": ["Resources", "OrdersAlias", "DependsOn"],
+      "Start": {"LineNumber": 412}
+    }
+  }
+]

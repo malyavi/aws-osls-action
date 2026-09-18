@@ -1,0 +1,14 @@
+{
+  "name": "aws-osls-action",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitHub Action synthesizing and linting every CloudFormation template a serverless configuration can produce",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "license": "MIT"
+}
